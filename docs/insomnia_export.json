@@ -1,0 +1,115 @@
+{
+  "_type": "export",
+  "__export_format": 4,
+  "__export_date": "2026-02-17T00:00:00.000Z",
+  "__export_source": "codex",
+  "resources": [
+    {
+      "_id": "wrk_airbnb_extra",
+      "_type": "workspace",
+      "name": "Airbnb Extra Service API",
+      "description": "Process API for additional services payment flow"
+    },
+    {
+      "_id": "env_airbnb_extra",
+      "_type": "environment",
+      "parentId": "wrk_airbnb_extra",
+      "name": "Base Environment",
+      "data": {
+        "base_url": "http://localhost:8080/api",
+        "service_request_id": "",
+        "payment_request_id": ""
+      }
+    },
+    {
+      "_id": "fld_flow",
+      "_type": "request_group",
+      "parentId": "wrk_airbnb_extra",
+      "name": "Main Flow"
+    },
+    {
+      "_id": "req_create_request",
+      "_type": "request",
+      "parentId": "fld_flow",
+      "name": "1. Guest initiates request",
+      "method": "POST",
+      "url": "{{ base_url }}/service-requests",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"guestId\": \"guest-100\",\n  \"hostId\": \"host-900\",\n  \"message\": \"Можно организовать ранний check-in с завтраком?\"\n}"
+      },
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ]
+    },
+    {
+      "_id": "req_terms",
+      "_type": "request",
+      "parentId": "fld_flow",
+      "name": "2. Host proposes terms",
+      "method": "POST",
+      "url": "{{ base_url }}/service-requests/{{ service_request_id }}/terms",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"amount\": 45.00,\n  \"currency\": \"USD\",\n  \"terms\": \"Ранний check-in в 10:00 и континентальный завтрак\"\n}"
+      },
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ]
+    },
+    {
+      "_id": "req_create_payment",
+      "_type": "request",
+      "parentId": "fld_flow",
+      "name": "3. Host creates payment request",
+      "method": "POST",
+      "url": "{{ base_url }}/service-requests/{{ service_request_id }}/payment-requests"
+    },
+    {
+      "_id": "req_pay",
+      "_type": "request",
+      "parentId": "fld_flow",
+      "name": "4A. Guest pays",
+      "method": "POST",
+      "url": "{{ base_url }}/payment-requests/{{ payment_request_id }}/pay"
+    },
+    {
+      "_id": "req_reject",
+      "_type": "request",
+      "parentId": "fld_flow",
+      "name": "4B. Guest rejects",
+      "method": "POST",
+      "url": "{{ base_url }}/payment-requests/{{ payment_request_id }}/reject"
+    },
+    {
+      "_id": "req_get_service",
+      "_type": "request",
+      "parentId": "fld_flow",
+      "name": "5. Get service request",
+      "method": "GET",
+      "url": "{{ base_url }}/service-requests/{{ service_request_id }}"
+    },
+    {
+      "_id": "req_get_payment",
+      "_type": "request",
+      "parentId": "fld_flow",
+      "name": "6. Get payment request",
+      "method": "GET",
+      "url": "{{ base_url }}/payment-requests/{{ payment_request_id }}"
+    },
+    {
+      "_id": "req_get_chat",
+      "_type": "request",
+      "parentId": "fld_flow",
+      "name": "7. Get chat timeline",
+      "method": "GET",
+      "url": "{{ base_url }}/service-requests/{{ service_request_id }}/chat"
+    }
+  ]
+}
