@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE_URL="${BASE_URL:-http://localhost:8080/api}"
+BASE_URL="${BASE_URL:-http://188.134.72.7:1488/api}"
 
 post_msg() {
   local chat_id="$1"
