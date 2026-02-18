@@ -18,7 +18,7 @@ public class Receipt {
     @Column(name = "payment_request_id", nullable = false, unique = true)
     private UUID paymentRequestId;
 
-    @Column(name = "receipt_number", nullable = false, unique = true)
+    @Column(name = "receipt_number", nullable = false, unique = true, length = 64)
     private String receiptNumber;
 
     @Column(name = "amount", nullable = false, precision = 12, scale = 2)

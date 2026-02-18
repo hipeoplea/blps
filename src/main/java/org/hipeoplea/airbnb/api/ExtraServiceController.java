@@ -4,9 +4,10 @@ import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
 import org.hipeoplea.airbnb.api.dto.ChatMessageView;
+import org.hipeoplea.airbnb.api.dto.CreateChatMessageDto;
 import org.hipeoplea.airbnb.api.dto.CreateServiceRequestDto;
-import org.hipeoplea.airbnb.api.dto.PaymentRequestView;
-import org.hipeoplea.airbnb.api.dto.ProposeTermsDto;
+import org.hipeoplea.airbnb.api.dto.ExtraServiceFormDto;
+import org.hipeoplea.airbnb.api.dto.ProcessPaymentDto;
 import org.hipeoplea.airbnb.api.dto.ServiceRequestView;
 import org.hipeoplea.airbnb.service.ExtraServiceProcessService;
 import org.springframework.http.HttpStatus;
@@ -19,7 +20,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/api")
+@RequestMapping("/api/chats")
 public class ExtraServiceController {
 
     private final ExtraServiceProcessService processService;
@@ -28,47 +29,61 @@ public class ExtraServiceController {
         this.processService = processService;
     }
 
-    @PostMapping("/service-requests")
+    @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public ServiceRequestView createServiceRequest(@Valid @RequestBody CreateServiceRequestDto dto) {
-        return processService.createRequest(dto);
+    public ServiceRequestView createChat(@Valid @RequestBody CreateServiceRequestDto dto) {
+        return processService.createChat(dto);
     }
 
-    @PostMapping("/service-requests/{requestId}/terms")
-    public ServiceRequestView proposeTerms(
-            @PathVariable UUID requestId,
-            @Valid @RequestBody ProposeTermsDto dto
+    @GetMapping("/{chatId}")
+    public ServiceRequestView getChat(@PathVariable UUID chatId) {
+        return processService.getChat(chatId);
+    }
+
+    @GetMapping("/{chatId}/messages")
+    public List<ChatMessageView> getChatMessages(@PathVariable UUID chatId) {
+        return processService.getChatMessages(chatId);
+    }
+
+    @PostMapping("/{chatId}/messages")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ChatMessageView postChatMessage(
+            @PathVariable UUID chatId,
+            @Valid @RequestBody CreateChatMessageDto dto
     ) {
-        return processService.proposeTerms(requestId, dto);
+        return processService.postChatMessage(chatId, dto);
     }
 
-    @PostMapping("/service-requests/{requestId}/payment-requests")
-    public ServiceRequestView createPaymentRequest(@PathVariable UUID requestId) {
-        return processService.createPaymentRequest(requestId);
+    @PostMapping("/{chatId}/extra-service/request")
+    public ServiceRequestView createExtraServiceRequest(
+            @PathVariable UUID chatId,
+            @Valid @RequestBody ExtraServiceFormDto dto
+    ) {
+        return processService.createExtraServiceRequest(chatId, dto);
     }
 
-    @PostMapping("/payment-requests/{paymentRequestId}/pay")
-    public ServiceRequestView guestPay(@PathVariable UUID paymentRequestId) {
-        return processService.guestPaid(paymentRequestId);
+    @PostMapping("/{chatId}/extra-service/requests/{requestId}/pay")
+    public ServiceRequestView processGuestPayment(
+            @PathVariable UUID chatId,
+            @PathVariable UUID requestId,
+            @Valid @RequestBody ProcessPaymentDto dto
+    ) {
+        return processService.processGuestPayment(chatId, requestId, dto);
     }
 
-    @PostMapping("/payment-requests/{paymentRequestId}/reject")
-    public ServiceRequestView guestReject(@PathVariable UUID paymentRequestId) {
-        return processService.guestRejected(paymentRequestId);
+    @PostMapping("/{chatId}/extra-service/requests/{requestId}/reject")
+    public ServiceRequestView rejectGuestPayment(
+            @PathVariable UUID chatId,
+            @PathVariable UUID requestId
+    ) {
+        return processService.rejectGuestPayment(chatId, requestId);
     }
 
-    @GetMapping("/service-requests/{requestId}")
-    public ServiceRequestView getServiceRequest(@PathVariable UUID requestId) {
-        return processService.getRequest(requestId);
-    }
-
-    @GetMapping("/payment-requests/{paymentRequestId}")
-    public PaymentRequestView getPaymentRequest(@PathVariable UUID paymentRequestId) {
-        return processService.getPaymentRequest(paymentRequestId);
-    }
-
-    @GetMapping("/service-requests/{requestId}/chat")
-    public List<ChatMessageView> getChat(@PathVariable UUID requestId) {
-        return processService.getChat(requestId);
+    @PostMapping("/{chatId}/extra-service/requests/{requestId}/deliver")
+    public ServiceRequestView markServiceDelivered(
+            @PathVariable UUID chatId,
+            @PathVariable UUID requestId
+    ) {
+        return processService.markServiceDelivered(chatId, requestId);
     }
 }

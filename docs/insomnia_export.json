@@ -1,39 +1,39 @@
 {
   "_type": "export",
   "__export_format": 4,
-  "__export_date": "2026-02-17T00:00:00.000Z",
+  "__export_date": "2026-02-18T00:00:00.000Z",
   "__export_source": "codex",
   "resources": [
     {
-      "_id": "wrk_airbnb_extra",
+      "_id": "wrk_airbnb_flow",
       "_type": "workspace",
-      "name": "Airbnb Extra Service API",
-      "description": "Process API for additional services payment flow"
+      "name": "Airbnb Extra Service Flow API",
+      "description": "Chat + multiple extra-service requests per chat"
     },
     {
-      "_id": "env_airbnb_extra",
+      "_id": "env_airbnb_flow",
       "_type": "environment",
-      "parentId": "wrk_airbnb_extra",
+      "parentId": "wrk_airbnb_flow",
       "name": "Base Environment",
       "data": {
         "base_url": "http://localhost:8080/api",
-        "service_request_id": "",
-        "payment_request_id": ""
+        "chat_id": "",
+        "request_id": ""
       }
     },
     {
-      "_id": "fld_flow",
+      "_id": "fld_main",
       "_type": "request_group",
-      "parentId": "wrk_airbnb_extra",
+      "parentId": "wrk_airbnb_flow",
       "name": "Main Flow"
     },
     {
-      "_id": "req_create_request",
+      "_id": "req_create_chat",
       "_type": "request",
-      "parentId": "fld_flow",
-      "name": "1. Guest initiates request",
+      "parentId": "fld_main",
+      "name": "1. Create chat",
       "method": "POST",
-      "url": "{{ base_url }}/service-requests",
+      "url": "{{ base_url }}/chats",
       "body": {
         "mimeType": "application/json",
         "text": "{\n  \"guestId\": \"guest-100\",\n  \"hostId\": \"host-900\",\n  \"message\": \"Можно организовать ранний check-in с завтраком?\"\n}"
@@ -46,15 +46,15 @@
       ]
     },
     {
-      "_id": "req_terms",
+      "_id": "req_chat_message",
       "_type": "request",
-      "parentId": "fld_flow",
-      "name": "2. Host proposes terms",
+      "parentId": "fld_main",
+      "name": "2. Post chat message",
       "method": "POST",
-      "url": "{{ base_url }}/service-requests/{{ service_request_id }}/terms",
+      "url": "{{ base_url }}/chats/{{ chat_id }}/messages",
       "body": {
         "mimeType": "application/json",
-        "text": "{\n  \"amount\": 45.00,\n  \"currency\": \"USD\",\n  \"terms\": \"Ранний check-in в 10:00 и континентальный завтрак\"\n}"
+        "text": "{\n  \"sender\": \"HOST\",\n  \"message\": \"45 USD, включает ранний заезд и завтрак.\"\n}"
       },
       "headers": [
         {
@@ -64,52 +64,82 @@
       ]
     },
     {
-      "_id": "req_create_payment",
+      "_id": "req_create_extra",
       "_type": "request",
-      "parentId": "fld_flow",
-      "name": "3. Host creates payment request",
+      "parentId": "fld_main",
+      "name": "3. Create extra-service request",
       "method": "POST",
-      "url": "{{ base_url }}/service-requests/{{ service_request_id }}/payment-requests"
+      "url": "{{ base_url }}/chats/{{ chat_id }}/extra-service/request",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"title\": \"Ранний check-in + завтрак\",\n  \"description\": \"Заезд в 10:00 и континентальный завтрак\",\n  \"amount\": 45.00,\n  \"currency\": \"USD\"\n}"
+      },
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ]
     },
     {
-      "_id": "req_pay",
+      "_id": "req_pay_success",
       "_type": "request",
-      "parentId": "fld_flow",
-      "name": "4A. Guest pays",
+      "parentId": "fld_main",
+      "name": "4A. Pay SUCCESS",
       "method": "POST",
-      "url": "{{ base_url }}/payment-requests/{{ payment_request_id }}/pay"
+      "url": "{{ base_url }}/chats/{{ chat_id }}/extra-service/requests/{{ request_id }}/pay",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"result\": \"SUCCESS\"\n}"
+      },
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ]
+    },
+    {
+      "_id": "req_pay_failed",
+      "_type": "request",
+      "parentId": "fld_main",
+      "name": "4B. Pay FAILED",
+      "method": "POST",
+      "url": "{{ base_url }}/chats/{{ chat_id }}/extra-service/requests/{{ request_id }}/pay",
+      "body": {
+        "mimeType": "application/json",
+        "text": "{\n  \"result\": \"FAILED\"\n}"
+      },
+      "headers": [
+        {
+          "name": "Content-Type",
+          "value": "application/json"
+        }
+      ]
     },
     {
       "_id": "req_reject",
       "_type": "request",
-      "parentId": "fld_flow",
-      "name": "4B. Guest rejects",
+      "parentId": "fld_main",
+      "name": "4C. Reject payment",
       "method": "POST",
-      "url": "{{ base_url }}/payment-requests/{{ payment_request_id }}/reject"
+      "url": "{{ base_url }}/chats/{{ chat_id }}/extra-service/requests/{{ request_id }}/reject"
     },
     {
-      "_id": "req_get_service",
+      "_id": "req_deliver",
       "_type": "request",
-      "parentId": "fld_flow",
-      "name": "5. Get service request",
-      "method": "GET",
-      "url": "{{ base_url }}/service-requests/{{ service_request_id }}"
-    },
-    {
-      "_id": "req_get_payment",
-      "_type": "request",
-      "parentId": "fld_flow",
-      "name": "6. Get payment request",
-      "method": "GET",
-      "url": "{{ base_url }}/payment-requests/{{ payment_request_id }}"
+      "parentId": "fld_main",
+      "name": "5. Mark delivered",
+      "method": "POST",
+      "url": "{{ base_url }}/chats/{{ chat_id }}/extra-service/requests/{{ request_id }}/deliver"
     },
     {
       "_id": "req_get_chat",
       "_type": "request",
-      "parentId": "fld_flow",
-      "name": "7. Get chat timeline",
+      "parentId": "fld_main",
+      "name": "6. Get chat aggregate",
       "method": "GET",
-      "url": "{{ base_url }}/service-requests/{{ service_request_id }}/chat"
+      "url": "{{ base_url }}/chats/{{ chat_id }}"
     }
   ]
 }

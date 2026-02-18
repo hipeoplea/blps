@@ -1,7 +1,8 @@
 package org.hipeoplea.airbnb.model;
 
-public enum PaymentStatus {
+public enum PaymentRequestStatus {
     PENDING,
     PAID,
+    FAILED,
     REJECTED
 }

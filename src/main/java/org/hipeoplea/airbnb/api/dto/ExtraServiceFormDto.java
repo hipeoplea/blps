@@ -12,7 +12,13 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class ProposeTermsDto {
+public class ExtraServiceFormDto {
+
+    @NotBlank
+    private String title;
+
+    @NotBlank
+    private String description;
 
     @NotNull
     @DecimalMin(value = "0.01")
@@ -21,7 +27,4 @@ public class ProposeTermsDto {
     @NotBlank
     @Pattern(regexp = "^[A-Z]{3}$")
     private String currency;
-
-    @NotBlank
-    private String terms;
 }

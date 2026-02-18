@@ -16,8 +16,8 @@ public class ChatMessage {
     @Id
     private UUID id;
 
-    @Column(name = "service_request_id", nullable = false)
-    private UUID serviceRequestId;
+    @Column(name = "chat_id", nullable = false)
+    private UUID chatId;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "sender", nullable = false, length = 32)
@@ -37,12 +37,12 @@ public class ChatMessage {
         this.id = id;
     }
 
-    public UUID getServiceRequestId() {
-        return serviceRequestId;
+    public UUID getChatId() {
+        return chatId;
     }
 
-    public void setServiceRequestId(UUID serviceRequestId) {
-        this.serviceRequestId = serviceRequestId;
+    public void setChatId(UUID chatId) {
+        this.chatId = chatId;
     }
 
     public ChatSender getSender() {

@@ -5,21 +5,27 @@ import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 import org.hipeoplea.airbnb.api.dto.ChatMessageView;
+import org.hipeoplea.airbnb.api.dto.CreateChatMessageDto;
 import org.hipeoplea.airbnb.api.dto.CreateServiceRequestDto;
+import org.hipeoplea.airbnb.api.dto.ExtraServiceFormDto;
+import org.hipeoplea.airbnb.api.dto.ExtraServiceRequestView;
+import org.hipeoplea.airbnb.api.dto.PaymentProcessResult;
 import org.hipeoplea.airbnb.api.dto.PaymentRequestView;
-import org.hipeoplea.airbnb.api.dto.ProposeTermsDto;
+import org.hipeoplea.airbnb.api.dto.ProcessPaymentDto;
 import org.hipeoplea.airbnb.api.dto.ReceiptView;
 import org.hipeoplea.airbnb.api.dto.ServiceRequestView;
 import org.hipeoplea.airbnb.exceptions.BusinessException;
 import org.hipeoplea.airbnb.exceptions.NotFoundException;
 import org.hipeoplea.airbnb.model.ChatMessage;
 import org.hipeoplea.airbnb.model.ChatSender;
+import org.hipeoplea.airbnb.model.ExtraServiceRequest;
+import org.hipeoplea.airbnb.model.ExtraServiceRequestStatus;
 import org.hipeoplea.airbnb.model.PaymentRequest;
-import org.hipeoplea.airbnb.model.PaymentStatus;
+import org.hipeoplea.airbnb.model.PaymentRequestStatus;
 import org.hipeoplea.airbnb.model.Receipt;
-import org.hipeoplea.airbnb.model.RequestStatus;
 import org.hipeoplea.airbnb.model.ServiceRequest;
 import org.hipeoplea.airbnb.repository.ChatMessageRepository;
+import org.hipeoplea.airbnb.repository.ExtraServiceRequestRepository;
 import org.hipeoplea.airbnb.repository.PaymentRequestRepository;
 import org.hipeoplea.airbnb.repository.ReceiptRepository;
 import org.hipeoplea.airbnb.repository.ServiceRequestRepository;
@@ -30,235 +36,281 @@ import org.springframework.transaction.annotation.Transactional;
 public class ExtraServiceProcessService {
 
     private final ServiceRequestRepository serviceRequestRepository;
+    private final ChatMessageRepository chatMessageRepository;
+    private final ExtraServiceRequestRepository extraServiceRequestRepository;
     private final PaymentRequestRepository paymentRequestRepository;
     private final ReceiptRepository receiptRepository;
-    private final ChatMessageRepository chatMessageRepository;
 
     public ExtraServiceProcessService(
             ServiceRequestRepository serviceRequestRepository,
+            ChatMessageRepository chatMessageRepository,
+            ExtraServiceRequestRepository extraServiceRequestRepository,
             PaymentRequestRepository paymentRequestRepository,
-            ReceiptRepository receiptRepository,
-            ChatMessageRepository chatMessageRepository
+            ReceiptRepository receiptRepository
     ) {
         this.serviceRequestRepository = serviceRequestRepository;
+        this.chatMessageRepository = chatMessageRepository;
+        this.extraServiceRequestRepository = extraServiceRequestRepository;
         this.paymentRequestRepository = paymentRequestRepository;
         this.receiptRepository = receiptRepository;
-        this.chatMessageRepository = chatMessageRepository;
     }
 
     @Transactional
-    public ServiceRequestView createRequest(CreateServiceRequestDto dto) {
+    public ServiceRequestView createChat(CreateServiceRequestDto dto) {
         OffsetDateTime now = OffsetDateTime.now();
-        ServiceRequest request = new ServiceRequest();
-        request.setId(UUID.randomUUID());
-        request.setGuestId(dto.getGuestId());
-        request.setHostId(dto.getHostId());
-        request.setGuestMessage(dto.getMessage());
-        request.setCurrency("USD");
-        request.setStatus(RequestStatus.INITIATED);
-        request.setCreatedAt(now);
-        request.setUpdatedAt(now);
-        serviceRequestRepository.save(request);
+        ServiceRequest chat = new ServiceRequest();
+        chat.setId(UUID.randomUUID());
+        chat.setGuestId(dto.getGuestId());
+        chat.setHostId(dto.getHostId());
+        chat.setCreatedAt(now);
+        chat.setUpdatedAt(now);
+        serviceRequestRepository.save(chat);
 
-        addChatMessage(request.getId(), ChatSender.GUEST, dto.getMessage(), now);
-        addChatMessage(request.getId(), ChatSender.PLATFORM, "Airbnb доставил сообщение хосту.", now);
-
-        return toServiceRequestView(request);
+        addChatMessage(chat.getId(), ChatSender.GUEST, dto.getMessage(), now);
+        return toServiceRequestView(chat);
     }
 
     @Transactional
-    public ServiceRequestView proposeTerms(UUID requestId, ProposeTermsDto dto) {
-        ServiceRequest request = findServiceRequest(requestId);
-        if (request.getStatus() != RequestStatus.INITIATED && request.getStatus() != RequestStatus.TERMS_PROPOSED) {
-            throw new BusinessException("Нельзя согласовать условия в текущем статусе: " + request.getStatus());
+    public ChatMessageView postChatMessage(UUID chatId, CreateChatMessageDto dto) {
+        ServiceRequest chat = findChat(chatId);
+        if (dto.getSender() == ChatSender.PLATFORM) {
+            throw new BusinessException("PLATFORM сообщения создаются только системой.");
         }
 
         OffsetDateTime now = OffsetDateTime.now();
-        request.setHostTerms(dto.getTerms());
-        request.setProposedAmount(normalizeAmount(dto.getAmount()));
-        request.setCurrency(dto.getCurrency());
-        request.setStatus(RequestStatus.TERMS_PROPOSED);
-        request.setUpdatedAt(now);
-        serviceRequestRepository.save(request);
-
-        addChatMessage(requestId, ChatSender.HOST,
-                "Готов оказать услугу. Цена: " + request.getProposedAmount() + " " + request.getCurrency()
-                        + ". Условия: " + request.getHostTerms(), now);
-        addChatMessage(requestId, ChatSender.PLATFORM, "Airbnb отправил цену и условия гостю.", now);
-
-        return toServiceRequestView(request);
+        ChatMessage message = addChatMessage(chatId, dto.getSender(), dto.getMessage(), now);
+        chat.setUpdatedAt(now);
+        serviceRequestRepository.save(chat);
+        return toChatMessageView(message);
     }
 
     @Transactional
-    public ServiceRequestView createPaymentRequest(UUID requestId) {
-        ServiceRequest request = findServiceRequest(requestId);
-        if (request.getStatus() != RequestStatus.TERMS_PROPOSED) {
-            throw new BusinessException("Платежный запрос можно создать только после согласования условий.");
-        }
-        if (paymentRequestRepository.findByServiceRequestId(requestId).isPresent()) {
-            throw new BusinessException("Платежный запрос уже существует.");
-        }
-        if (request.getProposedAmount() == null || request.getHostTerms() == null) {
-            throw new BusinessException("Перед созданием платежа нужно зафиксировать цену и условия.");
-        }
-
+    public ServiceRequestView createExtraServiceRequest(UUID chatId, ExtraServiceFormDto dto) {
+        ServiceRequest chat = findChat(chatId);
         OffsetDateTime now = OffsetDateTime.now();
+
+        ExtraServiceRequest extraServiceRequest = new ExtraServiceRequest();
+        extraServiceRequest.setId(UUID.randomUUID());
+        extraServiceRequest.setChatId(chatId);
+        extraServiceRequest.setStatus(ExtraServiceRequestStatus.REQUEST_CREATED);
+        extraServiceRequest.setTitle(dto.getTitle());
+        extraServiceRequest.setDescription(dto.getDescription());
+        extraServiceRequest.setAmount(normalizeAmount(dto.getAmount()));
+        extraServiceRequest.setCurrency(dto.getCurrency());
+        extraServiceRequest.setCreatedAt(now);
+        extraServiceRequest.setUpdatedAt(now);
+        extraServiceRequestRepository.save(extraServiceRequest);
+
         PaymentRequest paymentRequest = new PaymentRequest();
         paymentRequest.setId(UUID.randomUUID());
-        paymentRequest.setServiceRequestId(requestId);
-        paymentRequest.setAmount(request.getProposedAmount());
-        paymentRequest.setCurrency(request.getCurrency());
-        paymentRequest.setStatus(PaymentStatus.PENDING);
+        paymentRequest.setExtraServiceRequestId(extraServiceRequest.getId());
+        paymentRequest.setStatus(PaymentRequestStatus.PENDING);
         paymentRequest.setCreatedAt(now);
         paymentRequestRepository.save(paymentRequest);
 
-        request.setStatus(RequestStatus.PAYMENT_REQUESTED);
-        request.setUpdatedAt(now);
-        serviceRequestRepository.save(request);
+        chat.setUpdatedAt(now);
+        serviceRequestRepository.save(chat);
 
-        addChatMessage(requestId, ChatSender.HOST,
-                "Создан платежный запрос в Resolution Center на " + paymentRequest.getAmount() + " "
-                        + paymentRequest.getCurrency(), now);
-        addChatMessage(requestId, ChatSender.PLATFORM,
-                "Airbnb зарегистрировал платежный запрос и уведомил гостя.", now);
+        addChatMessage(chatId, ChatSender.HOST,
+                "Создал заявку: " + dto.getTitle() + " / " + extraServiceRequest.getAmount() + " " + dto.getCurrency(),
+                now);
+        addChatMessage(chatId, ChatSender.PLATFORM,
+                "Airbnb зарегистрировал запрос и отправил гостю уведомление об оплате.", now);
 
-        return toServiceRequestView(request);
+        return toServiceRequestView(chat);
     }
 
     @Transactional
-    public ServiceRequestView guestPaid(UUID paymentRequestId) {
-        PaymentRequest paymentRequest = findPaymentRequest(paymentRequestId);
-        if (paymentRequest.getStatus() != PaymentStatus.PENDING) {
-            throw new BusinessException("Оплата невозможна, текущий статус платежа: " + paymentRequest.getStatus());
+    public ServiceRequestView processGuestPayment(UUID chatId, UUID requestId, ProcessPaymentDto dto) {
+        ServiceRequest chat = findChat(chatId);
+        ExtraServiceRequest request = findExtraServiceRequest(chatId, requestId);
+        PaymentRequest paymentRequest = findPaymentRequest(request.getId());
+
+        if (paymentRequest.getStatus() != PaymentRequestStatus.PENDING) {
+            throw new BusinessException("Платеж уже обработан: " + paymentRequest.getStatus());
         }
 
         OffsetDateTime now = OffsetDateTime.now();
-        paymentRequest.setStatus(PaymentStatus.PAID);
-        paymentRequest.setResolvedAt(now);
-        paymentRequestRepository.save(paymentRequest);
+        if (dto.getResult() == PaymentProcessResult.SUCCESS) {
+            paymentRequest.setStatus(PaymentRequestStatus.PAID);
+            paymentRequest.setResolvedAt(now);
+            paymentRequestRepository.save(paymentRequest);
 
-        ServiceRequest request = findServiceRequest(paymentRequest.getServiceRequestId());
-        request.setStatus(RequestStatus.PAID);
-        request.setUpdatedAt(now);
-        serviceRequestRepository.save(request);
+            request.setStatus(ExtraServiceRequestStatus.PAID);
+            request.setUpdatedAt(now);
+            extraServiceRequestRepository.save(request);
 
-        Receipt receipt = new Receipt();
-        receipt.setId(UUID.randomUUID());
-        receipt.setPaymentRequestId(paymentRequest.getId());
-        receipt.setReceiptNumber("RCP-" + now.toEpochSecond() + "-" + paymentRequest.getId().toString().substring(0, 8));
-        receipt.setAmount(paymentRequest.getAmount());
-        receipt.setCurrency(paymentRequest.getCurrency());
-        receipt.setIssuedAt(now);
-        receiptRepository.save(receipt);
+            Receipt receipt = new Receipt();
+            receipt.setId(UUID.randomUUID());
+            receipt.setPaymentRequestId(paymentRequest.getId());
+            receipt.setReceiptNumber(generateReceiptNumber(request.getId(), now));
+            receipt.setAmount(request.getAmount());
+            receipt.setCurrency(request.getCurrency());
+            receipt.setIssuedAt(now);
+            receiptRepository.save(receipt);
 
-        addChatMessage(request.getId(), ChatSender.PLATFORM,
-                "Airbnb списал сумму, сформировал чек " + receipt.getReceiptNumber() + " и уведомил хоста.", now);
-        addChatMessage(request.getId(), ChatSender.HOST, "Услуга оказана гостю.", now);
+            addChatMessage(chatId, ChatSender.PLATFORM,
+                    "Оплата подтверждена, сформирован чек " + receipt.getReceiptNumber() + ".", now);
+            addChatMessage(chatId, ChatSender.PLATFORM, "Хост уведомлен о поступлении оплаты.", now);
+        } else {
+            paymentRequest.setStatus(PaymentRequestStatus.FAILED);
+            paymentRequest.setResolvedAt(now);
+            paymentRequestRepository.save(paymentRequest);
 
-        return toServiceRequestView(request);
+            request.setStatus(ExtraServiceRequestStatus.PAYMENT_FAILED);
+            request.setUpdatedAt(now);
+            extraServiceRequestRepository.save(request);
+
+            addChatMessage(chatId, ChatSender.PLATFORM,
+                    "Списание неуспешно. Гость и хост уведомлены.", now);
+        }
+
+        chat.setUpdatedAt(now);
+        serviceRequestRepository.save(chat);
+        return toServiceRequestView(chat);
     }
 
     @Transactional
-    public ServiceRequestView guestRejected(UUID paymentRequestId) {
-        PaymentRequest paymentRequest = findPaymentRequest(paymentRequestId);
-        if (paymentRequest.getStatus() != PaymentStatus.PENDING) {
-            throw new BusinessException("Отклонение невозможно, текущий статус платежа: " + paymentRequest.getStatus());
+    public ServiceRequestView rejectGuestPayment(UUID chatId, UUID requestId) {
+        ServiceRequest chat = findChat(chatId);
+        ExtraServiceRequest request = findExtraServiceRequest(chatId, requestId);
+        PaymentRequest paymentRequest = findPaymentRequest(request.getId());
+
+        if (paymentRequest.getStatus() != PaymentRequestStatus.PENDING) {
+            throw new BusinessException("Платеж уже обработан: " + paymentRequest.getStatus());
         }
 
         OffsetDateTime now = OffsetDateTime.now();
-        paymentRequest.setStatus(PaymentStatus.REJECTED);
+        paymentRequest.setStatus(PaymentRequestStatus.REJECTED);
         paymentRequest.setResolvedAt(now);
         paymentRequestRepository.save(paymentRequest);
 
-        ServiceRequest request = findServiceRequest(paymentRequest.getServiceRequestId());
-        request.setStatus(RequestStatus.REJECTED);
+        request.setStatus(ExtraServiceRequestStatus.REJECTED);
         request.setUpdatedAt(now);
-        serviceRequestRepository.save(request);
+        extraServiceRequestRepository.save(request);
 
-        addChatMessage(request.getId(), ChatSender.PLATFORM,
-                "Гость отклонил платеж. Запрос закрыт без оплаты.", now);
+        chat.setUpdatedAt(now);
+        serviceRequestRepository.save(chat);
 
-        return toServiceRequestView(request);
+        addChatMessage(chatId, ChatSender.PLATFORM, "Гость отказался от оплаты. Запрос закрыт.", now);
+        return toServiceRequestView(chat);
     }
 
     @Transactional
-    public ServiceRequestView getRequest(UUID requestId) {
-        return toServiceRequestView(findServiceRequest(requestId));
+    public ServiceRequestView markServiceDelivered(UUID chatId, UUID requestId) {
+        ServiceRequest chat = findChat(chatId);
+        ExtraServiceRequest request = findExtraServiceRequest(chatId, requestId);
+
+        if (request.getStatus() != ExtraServiceRequestStatus.PAID) {
+            throw new BusinessException("Оказать услугу можно только после успешной оплаты.");
+        }
+
+        OffsetDateTime now = OffsetDateTime.now();
+        request.setStatus(ExtraServiceRequestStatus.SERVICE_DELIVERED);
+        request.setUpdatedAt(now);
+        extraServiceRequestRepository.save(request);
+
+        chat.setUpdatedAt(now);
+        serviceRequestRepository.save(chat);
+
+        addChatMessage(chatId, ChatSender.HOST, "Дополнительная услуга оказана.", now);
+        return toServiceRequestView(chat);
     }
 
     @Transactional(readOnly = true)
-    public PaymentRequestView getPaymentRequest(UUID paymentRequestId) {
-        return toPaymentRequestView(findPaymentRequest(paymentRequestId));
+    public ServiceRequestView getChat(UUID chatId) {
+        return toServiceRequestView(findChat(chatId));
     }
 
     @Transactional(readOnly = true)
-    public List<ChatMessageView> getChat(UUID requestId) {
-        findServiceRequest(requestId);
-        return chatMessageRepository.findByServiceRequestIdOrderByCreatedAtAsc(requestId).stream()
+    public List<ChatMessageView> getChatMessages(UUID chatId) {
+        findChat(chatId);
+        return chatMessageRepository.findByChatIdOrderByCreatedAtAsc(chatId)
+                .stream()
                 .map(this::toChatMessageView)
                 .toList();
     }
 
-    private ServiceRequest findServiceRequest(UUID requestId) {
-        return serviceRequestRepository.findById(requestId)
-                .orElseThrow(() -> new NotFoundException("Service request not found: " + requestId));
+    private ServiceRequest findChat(UUID chatId) {
+        return serviceRequestRepository.findById(chatId)
+                .orElseThrow(() -> new NotFoundException("Chat not found: " + chatId));
     }
 
-    private PaymentRequest findPaymentRequest(UUID paymentRequestId) {
-        return paymentRequestRepository.findById(paymentRequestId)
-                .orElseThrow(() -> new NotFoundException("Payment request not found: " + paymentRequestId));
+    private ExtraServiceRequest findExtraServiceRequest(UUID chatId, UUID requestId) {
+        ExtraServiceRequest request = extraServiceRequestRepository.findById(requestId)
+                .orElseThrow(() -> new NotFoundException("Extra service request not found: " + requestId));
+        if (!request.getChatId().equals(chatId)) {
+            throw new BusinessException("Заявка не принадлежит данному чату.");
+        }
+        return request;
     }
 
-    private void addChatMessage(UUID requestId, ChatSender sender, String message, OffsetDateTime at) {
+    private PaymentRequest findPaymentRequest(UUID extraServiceRequestId) {
+        return paymentRequestRepository.findByExtraServiceRequestId(extraServiceRequestId)
+                .orElseThrow(() -> new NotFoundException("Payment request not found for extra service request: " + extraServiceRequestId));
+    }
+
+    private ChatMessage addChatMessage(UUID chatId, ChatSender sender, String text, OffsetDateTime at) {
         ChatMessage chatMessage = new ChatMessage();
         chatMessage.setId(UUID.randomUUID());
-        chatMessage.setServiceRequestId(requestId);
+        chatMessage.setChatId(chatId);
         chatMessage.setSender(sender);
-        chatMessage.setMessage(message);
+        chatMessage.setMessage(text);
         chatMessage.setCreatedAt(at);
-        chatMessageRepository.save(chatMessage);
+        return chatMessageRepository.save(chatMessage);
     }
 
-    private ServiceRequestView toServiceRequestView(ServiceRequest request) {
-        PaymentRequestView paymentRequest = paymentRequestRepository.findByServiceRequestId(request.getId())
-                .map(this::toPaymentRequestView)
-                .orElse(null);
-
-        List<ChatMessageView> chat = chatMessageRepository.findByServiceRequestIdOrderByCreatedAtAsc(request.getId())
+    private ServiceRequestView toServiceRequestView(ServiceRequest chat) {
+        List<ChatMessageView> messages = chatMessageRepository.findByChatIdOrderByCreatedAtAsc(chat.getId())
                 .stream()
                 .map(this::toChatMessageView)
                 .toList();
 
+        List<ExtraServiceRequestView> requests = extraServiceRequestRepository.findByChatIdOrderByCreatedAtAsc(chat.getId())
+                .stream()
+                .map(this::toExtraServiceRequestView)
+                .toList();
+
         return new ServiceRequestView(
+                chat.getId(),
+                chat.getGuestId(),
+                chat.getHostId(),
+                chat.getCreatedAt(),
+                chat.getUpdatedAt(),
+                requests,
+                messages
+        );
+    }
+
+    private ExtraServiceRequestView toExtraServiceRequestView(ExtraServiceRequest request) {
+        PaymentRequestView paymentRequestView = paymentRequestRepository.findByExtraServiceRequestId(request.getId())
+                .map(this::toPaymentRequestView)
+                .orElse(null);
+
+        return new ExtraServiceRequestView(
                 request.getId(),
-                request.getGuestId(),
-                request.getHostId(),
-                request.getGuestMessage(),
-                request.getHostTerms(),
-                request.getProposedAmount(),
-                request.getCurrency(),
                 request.getStatus(),
+                request.getTitle(),
+                request.getDescription(),
+                request.getAmount(),
+                request.getCurrency(),
                 request.getCreatedAt(),
                 request.getUpdatedAt(),
-                paymentRequest,
-                chat
+                paymentRequestView
         );
     }
 
     private PaymentRequestView toPaymentRequestView(PaymentRequest paymentRequest) {
-        ReceiptView receipt = receiptRepository.findByPaymentRequestId(paymentRequest.getId())
+        ReceiptView receiptView = receiptRepository.findByPaymentRequestId(paymentRequest.getId())
                 .map(this::toReceiptView)
                 .orElse(null);
 
         return new PaymentRequestView(
                 paymentRequest.getId(),
-                paymentRequest.getServiceRequestId(),
-                paymentRequest.getAmount(),
-                paymentRequest.getCurrency(),
                 paymentRequest.getStatus(),
                 paymentRequest.getCreatedAt(),
                 paymentRequest.getResolvedAt(),
-                receipt
+                receiptView
         );
     }
 
@@ -272,16 +324,20 @@ public class ExtraServiceProcessService {
         );
     }
 
-    private ChatMessageView toChatMessageView(ChatMessage chatMessage) {
+    private ChatMessageView toChatMessageView(ChatMessage message) {
         return new ChatMessageView(
-                chatMessage.getId(),
-                chatMessage.getSender(),
-                chatMessage.getMessage(),
-                chatMessage.getCreatedAt()
+                message.getId(),
+                message.getSender(),
+                message.getMessage(),
+                message.getCreatedAt()
         );
     }
 
     private BigDecimal normalizeAmount(BigDecimal amount) {
         return amount.setScale(2, java.math.RoundingMode.HALF_UP);
+    }
+
+    private String generateReceiptNumber(UUID requestId, OffsetDateTime now) {
+        return "RCP-" + now.toEpochSecond() + "-" + requestId.toString().substring(0, 8);
     }
 }

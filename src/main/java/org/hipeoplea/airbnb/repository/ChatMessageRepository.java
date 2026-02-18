@@ -7,5 +7,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface ChatMessageRepository extends JpaRepository<ChatMessage, UUID> {
 
-    List<ChatMessage> findByServiceRequestIdOrderByCreatedAtAsc(UUID serviceRequestId);
+    List<ChatMessage> findByChatIdOrderByCreatedAtAsc(UUID chatId);
 }

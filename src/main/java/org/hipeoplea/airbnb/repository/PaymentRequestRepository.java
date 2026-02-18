@@ -7,5 +7,5 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 public interface PaymentRequestRepository extends JpaRepository<PaymentRequest, UUID> {
 
-    Optional<PaymentRequest> findByServiceRequestId(UUID serviceRequestId);
+    Optional<PaymentRequest> findByExtraServiceRequestId(UUID extraServiceRequestId);
 }

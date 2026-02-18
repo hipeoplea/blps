@@ -1,12 +1,11 @@
 package org.hipeoplea.airbnb.api.dto;
 
-import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import org.hipeoplea.airbnb.model.PaymentStatus;
+import org.hipeoplea.airbnb.model.PaymentRequestStatus;
 
 @Data
 @NoArgsConstructor
@@ -14,10 +13,7 @@ import org.hipeoplea.airbnb.model.PaymentStatus;
 public class PaymentRequestView {
 
     private UUID id;
-    private UUID serviceRequestId;
-    private BigDecimal amount;
-    private String currency;
-    private PaymentStatus status;
+    private PaymentRequestStatus status;
     private OffsetDateTime createdAt;
     private OffsetDateTime resolvedAt;
     private ReceiptView receipt;
