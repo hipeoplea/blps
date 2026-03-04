@@ -20,9 +20,9 @@ services:
       DB_URL: jdbc:postgresql://pg:5432/study
       DB_USER: user
       DB_PASSWORD: user
-      SERVER_PORT: 1488
+      SERVER_PORT: 8433
     ports:
-      - "1488:1488"
+      - "8433:8433"
 
 volumes:
   pgdata:

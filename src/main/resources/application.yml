@@ -12,7 +12,7 @@ spring:
         format_sql: true
 
 server:
-  port: ${SERVER_PORT:1488}
+  port: ${SERVER_PORT:8433}
 
 yookassa:
   api-base-url: ${YOOKASSA_API_BASE_URL:https://api.yookassa.ru}
