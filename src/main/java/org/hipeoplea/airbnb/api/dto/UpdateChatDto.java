@@ -1,6 +1,6 @@
 package org.hipeoplea.airbnb.api.dto;
 
-import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -8,8 +8,11 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class ProcessPaymentDto {
+public class UpdateChatDto {
 
-    @NotNull
-    private PaymentProcessResult result;
+    @NotBlank
+    private String guestId;
+
+    @NotBlank
+    private String hostId;
 }

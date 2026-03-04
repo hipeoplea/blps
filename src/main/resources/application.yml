@@ -13,3 +13,9 @@ spring:
 
 server:
   port: ${SERVER_PORT:1488}
+
+yookassa:
+  api-base-url: ${YOOKASSA_API_BASE_URL:https://api.yookassa.ru}
+  shop-id: ${YOOKASSA_SHOP_ID:1232637}
+  secret-key: ${YOOKASSA_SECRET_KEY:test_1ICJ7-3M3zk5gGv7s1tPDCK45DfV0nHlbJ6V1eksem8}
+  return-url: ${YOOKASSA_RETURN_URL:https://airbnb.local/payment/return}

@@ -9,11 +9,11 @@ import org.hipeoplea.airbnb.api.dto.CreateChatMessageDto;
 import org.hipeoplea.airbnb.api.dto.CreateServiceRequestDto;
 import org.hipeoplea.airbnb.api.dto.ExtraServiceFormDto;
 import org.hipeoplea.airbnb.api.dto.ExtraServiceRequestView;
-import org.hipeoplea.airbnb.api.dto.PaymentProcessResult;
 import org.hipeoplea.airbnb.api.dto.PaymentRequestView;
-import org.hipeoplea.airbnb.api.dto.ProcessPaymentDto;
 import org.hipeoplea.airbnb.api.dto.ReceiptView;
 import org.hipeoplea.airbnb.api.dto.ServiceRequestView;
+import org.hipeoplea.airbnb.api.dto.UpdateChatDto;
+import org.hipeoplea.airbnb.api.dto.UpdateExtraServiceRequestDto;
 import org.hipeoplea.airbnb.exceptions.BusinessException;
 import org.hipeoplea.airbnb.exceptions.NotFoundException;
 import org.hipeoplea.airbnb.model.ChatMessage;
@@ -29,6 +29,8 @@ import org.hipeoplea.airbnb.repository.ExtraServiceRequestRepository;
 import org.hipeoplea.airbnb.repository.PaymentRequestRepository;
 import org.hipeoplea.airbnb.repository.ReceiptRepository;
 import org.hipeoplea.airbnb.repository.ServiceRequestRepository;
+import org.hipeoplea.airbnb.service.payment.YooKassaCreatePaymentResponse;
+import org.hipeoplea.airbnb.service.payment.YooKassaPaymentClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,19 +42,25 @@ public class ExtraServiceProcessService {
     private final ExtraServiceRequestRepository extraServiceRequestRepository;
     private final PaymentRequestRepository paymentRequestRepository;
     private final ReceiptRepository receiptRepository;
+    private final YooKassaPaymentClient yooKassaPaymentClient;
+    private final ChatEventsPublisher chatEventsPublisher;
 
     public ExtraServiceProcessService(
             ServiceRequestRepository serviceRequestRepository,
             ChatMessageRepository chatMessageRepository,
             ExtraServiceRequestRepository extraServiceRequestRepository,
             PaymentRequestRepository paymentRequestRepository,
-            ReceiptRepository receiptRepository
+            ReceiptRepository receiptRepository,
+            YooKassaPaymentClient yooKassaPaymentClient,
+            ChatEventsPublisher chatEventsPublisher
     ) {
         this.serviceRequestRepository = serviceRequestRepository;
         this.chatMessageRepository = chatMessageRepository;
         this.extraServiceRequestRepository = extraServiceRequestRepository;
         this.paymentRequestRepository = paymentRequestRepository;
         this.receiptRepository = receiptRepository;
+        this.yooKassaPaymentClient = yooKassaPaymentClient;
+        this.chatEventsPublisher = chatEventsPublisher;
     }
 
     @Transactional
@@ -68,6 +76,37 @@ public class ExtraServiceProcessService {
 
         addChatMessage(chat.getId(), ChatSender.GUEST, dto.getMessage(), now);
         return toServiceRequestView(chat);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ServiceRequestView> getChats() {
+        return serviceRequestRepository.findAll().stream()
+                .map(this::toServiceRequestView)
+                .toList();
+    }
+
+    @Transactional
+    public ServiceRequestView updateChat(UUID chatId, UpdateChatDto dto) {
+        ServiceRequest chat = findChat(chatId);
+        OffsetDateTime now = OffsetDateTime.now();
+        chat.setGuestId(dto.getGuestId());
+        chat.setHostId(dto.getHostId());
+        chat.setUpdatedAt(now);
+        serviceRequestRepository.save(chat);
+        return toServiceRequestView(chat);
+    }
+
+    @Transactional
+    public void deleteChat(UUID chatId) {
+        ServiceRequest chat = findChat(chatId);
+        List<ExtraServiceRequest> requests = extraServiceRequestRepository.findByChatIdOrderByCreatedAtAsc(chatId);
+        for (ExtraServiceRequest request : requests) {
+            deletePaymentArtifacts(request.getId());
+            extraServiceRequestRepository.delete(request);
+        }
+        chatMessageRepository.findByChatIdOrderByCreatedAtAsc(chatId)
+                .forEach(chatMessageRepository::delete);
+        serviceRequestRepository.delete(chat);
     }
 
     @Transactional
@@ -92,7 +131,7 @@ public class ExtraServiceProcessService {
         ExtraServiceRequest extraServiceRequest = new ExtraServiceRequest();
         extraServiceRequest.setId(UUID.randomUUID());
         extraServiceRequest.setChatId(chatId);
-        extraServiceRequest.setStatus(ExtraServiceRequestStatus.REQUEST_CREATED);
+        extraServiceRequest.setStatus(ExtraServiceRequestStatus.WAITING_GUEST_APPROVAL);
         extraServiceRequest.setTitle(dto.getTitle());
         extraServiceRequest.setDescription(dto.getDescription());
         extraServiceRequest.setAmount(normalizeAmount(dto.getAmount()));
@@ -101,13 +140,6 @@ public class ExtraServiceProcessService {
         extraServiceRequest.setUpdatedAt(now);
         extraServiceRequestRepository.save(extraServiceRequest);
 
-        PaymentRequest paymentRequest = new PaymentRequest();
-        paymentRequest.setId(UUID.randomUUID());
-        paymentRequest.setExtraServiceRequestId(extraServiceRequest.getId());
-        paymentRequest.setStatus(PaymentRequestStatus.PENDING);
-        paymentRequest.setCreatedAt(now);
-        paymentRequestRepository.save(paymentRequest);
-
         chat.setUpdatedAt(now);
         serviceRequestRepository.save(chat);
 
@@ -115,58 +147,91 @@ public class ExtraServiceProcessService {
                 "Создал заявку: " + dto.getTitle() + " / " + extraServiceRequest.getAmount() + " " + dto.getCurrency(),
                 now);
         addChatMessage(chatId, ChatSender.PLATFORM,
-                "Airbnb зарегистрировал запрос и отправил гостю уведомление об оплате.", now);
+                "Airbnb зарегистрировал запрос. Ожидаем подтверждение гостя для создания платежной ссылки.",
+                now);
 
         return toServiceRequestView(chat);
     }
 
+    @Transactional(readOnly = true)
+    public List<ExtraServiceRequestView> getExtraServiceRequests(UUID chatId) {
+        findChat(chatId);
+        return extraServiceRequestRepository.findByChatIdOrderByCreatedAtAsc(chatId)
+                .stream()
+                .map(this::toExtraServiceRequestView)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public ExtraServiceRequestView getExtraServiceRequest(UUID chatId, UUID requestId) {
+        return toExtraServiceRequestView(findExtraServiceRequest(chatId, requestId));
+    }
+
     @Transactional
-    public ServiceRequestView processGuestPayment(UUID chatId, UUID requestId, ProcessPaymentDto dto) {
+    public ExtraServiceRequestView updateExtraServiceRequest(UUID chatId, UUID requestId, UpdateExtraServiceRequestDto dto) {
+        ExtraServiceRequest request = findExtraServiceRequest(chatId, requestId);
+        if (request.getStatus() != ExtraServiceRequestStatus.WAITING_GUEST_APPROVAL) {
+            throw new BusinessException("Обновление заявки возможно только в статусе WAITING_GUEST_APPROVAL.");
+        }
+
+        request.setTitle(dto.getTitle());
+        request.setDescription(dto.getDescription());
+        request.setAmount(normalizeAmount(dto.getAmount()));
+        request.setCurrency(dto.getCurrency());
+        request.setUpdatedAt(OffsetDateTime.now());
+        extraServiceRequestRepository.save(request);
+        return toExtraServiceRequestView(request);
+    }
+
+    @Transactional
+    public void deleteExtraServiceRequest(UUID chatId, UUID requestId) {
+        ExtraServiceRequest request = findExtraServiceRequest(chatId, requestId);
+        if (request.getStatus() == ExtraServiceRequestStatus.PAID
+                || request.getStatus() == ExtraServiceRequestStatus.SERVICE_DELIVERED) {
+            throw new BusinessException("Нельзя удалить заявку в статусе " + request.getStatus());
+        }
+
+        deletePaymentArtifacts(request.getId());
+        extraServiceRequestRepository.delete(request);
+    }
+
+    @Transactional
+    public ServiceRequestView approveGuestPayment(UUID chatId, UUID requestId) {
         ServiceRequest chat = findChat(chatId);
         ExtraServiceRequest request = findExtraServiceRequest(chatId, requestId);
-        PaymentRequest paymentRequest = findPaymentRequest(request.getId());
 
-        if (paymentRequest.getStatus() != PaymentRequestStatus.PENDING) {
-            throw new BusinessException("Платеж уже обработан: " + paymentRequest.getStatus());
+        if (request.getStatus() != ExtraServiceRequestStatus.WAITING_GUEST_APPROVAL) {
+            throw new BusinessException("Подтверждение оплаты возможно только для заявки со статусом WAITING_GUEST_APPROVAL.");
+        }
+
+        if (paymentRequestRepository.findByExtraServiceRequestId(request.getId()).isPresent()) {
+            throw new BusinessException("Платежная ссылка уже создана для этой заявки.");
         }
 
         OffsetDateTime now = OffsetDateTime.now();
-        if (dto.getResult() == PaymentProcessResult.SUCCESS) {
-            paymentRequest.setStatus(PaymentRequestStatus.PAID);
-            paymentRequest.setResolvedAt(now);
-            paymentRequestRepository.save(paymentRequest);
+        YooKassaCreatePaymentResponse paymentResponse = yooKassaPaymentClient.createPayment(request);
 
-            request.setStatus(ExtraServiceRequestStatus.PAID);
-            request.setUpdatedAt(now);
-            extraServiceRequestRepository.save(request);
+        PaymentRequest paymentRequest = new PaymentRequest();
+        paymentRequest.setId(UUID.randomUUID());
+        paymentRequest.setExtraServiceRequestId(request.getId());
+        paymentRequest.setProviderPaymentId(paymentResponse.paymentId());
+        paymentRequest.setPaymentUrl(paymentResponse.paymentUrl());
+        paymentRequest.setStatus(PaymentRequestStatus.WAITING_PAYMENT);
+        paymentRequest.setCreatedAt(now);
+        paymentRequest.setExpiresAt(paymentResponse.expiresAt());
+        paymentRequestRepository.save(paymentRequest);
 
-            Receipt receipt = new Receipt();
-            receipt.setId(UUID.randomUUID());
-            receipt.setPaymentRequestId(paymentRequest.getId());
-            receipt.setReceiptNumber(generateReceiptNumber(request.getId(), now));
-            receipt.setAmount(request.getAmount());
-            receipt.setCurrency(request.getCurrency());
-            receipt.setIssuedAt(now);
-            receiptRepository.save(receipt);
-
-            addChatMessage(chatId, ChatSender.PLATFORM,
-                    "Оплата подтверждена, сформирован чек " + receipt.getReceiptNumber() + ".", now);
-            addChatMessage(chatId, ChatSender.PLATFORM, "Хост уведомлен о поступлении оплаты.", now);
-        } else {
-            paymentRequest.setStatus(PaymentRequestStatus.FAILED);
-            paymentRequest.setResolvedAt(now);
-            paymentRequestRepository.save(paymentRequest);
-
-            request.setStatus(ExtraServiceRequestStatus.PAYMENT_FAILED);
-            request.setUpdatedAt(now);
-            extraServiceRequestRepository.save(request);
-
-            addChatMessage(chatId, ChatSender.PLATFORM,
-                    "Списание неуспешно. Гость и хост уведомлены.", now);
-        }
+        request.setStatus(ExtraServiceRequestStatus.PAYMENT_LINK_SENT);
+        request.setUpdatedAt(now);
+        extraServiceRequestRepository.save(request);
 
         chat.setUpdatedAt(now);
         serviceRequestRepository.save(chat);
+
+        addChatMessage(chatId, ChatSender.PLATFORM,
+                "Платежная ссылка ЮКассы создана и отправлена гостю: " + paymentResponse.paymentUrl(),
+                now);
+
         return toServiceRequestView(chat);
     }
 
@@ -174,16 +239,18 @@ public class ExtraServiceProcessService {
     public ServiceRequestView rejectGuestPayment(UUID chatId, UUID requestId) {
         ServiceRequest chat = findChat(chatId);
         ExtraServiceRequest request = findExtraServiceRequest(chatId, requestId);
-        PaymentRequest paymentRequest = findPaymentRequest(request.getId());
 
-        if (paymentRequest.getStatus() != PaymentRequestStatus.PENDING) {
+        OffsetDateTime now = OffsetDateTime.now();
+        PaymentRequest paymentRequest = paymentRequestRepository.findByExtraServiceRequestId(request.getId()).orElse(null);
+        if (paymentRequest != null && isFinalPaymentStatus(paymentRequest.getStatus())) {
             throw new BusinessException("Платеж уже обработан: " + paymentRequest.getStatus());
         }
 
-        OffsetDateTime now = OffsetDateTime.now();
-        paymentRequest.setStatus(PaymentRequestStatus.REJECTED);
-        paymentRequest.setResolvedAt(now);
-        paymentRequestRepository.save(paymentRequest);
+        if (paymentRequest != null) {
+            paymentRequest.setStatus(PaymentRequestStatus.REJECTED);
+            paymentRequest.setResolvedAt(now);
+            paymentRequestRepository.save(paymentRequest);
+        }
 
         request.setStatus(ExtraServiceRequestStatus.REJECTED);
         request.setUpdatedAt(now);
@@ -194,6 +261,74 @@ public class ExtraServiceProcessService {
 
         addChatMessage(chatId, ChatSender.PLATFORM, "Гость отказался от оплаты. Запрос закрыт.", now);
         return toServiceRequestView(chat);
+    }
+
+    @Transactional
+    public void processYooKassaPaymentSuccess(String providerPaymentId) {
+        PaymentRequest paymentRequest = findPaymentByProviderId(providerPaymentId);
+        if (isFinalPaymentStatus(paymentRequest.getStatus())) {
+            return;
+        }
+
+        ExtraServiceRequest request = findExtraServiceRequestById(paymentRequest.getExtraServiceRequestId());
+        ServiceRequest chat = findChat(request.getChatId());
+
+        OffsetDateTime now = OffsetDateTime.now();
+        paymentRequest.setStatus(PaymentRequestStatus.PAID);
+        paymentRequest.setResolvedAt(now);
+        paymentRequestRepository.save(paymentRequest);
+
+        request.setStatus(ExtraServiceRequestStatus.PAID);
+        request.setUpdatedAt(now);
+        extraServiceRequestRepository.save(request);
+
+        Receipt receipt = receiptRepository.findByPaymentRequestId(paymentRequest.getId()).orElseGet(() -> {
+            Receipt newReceipt = new Receipt();
+            newReceipt.setId(UUID.randomUUID());
+            newReceipt.setPaymentRequestId(paymentRequest.getId());
+            newReceipt.setReceiptNumber(generateReceiptNumber(request.getId(), now));
+            newReceipt.setAmount(request.getAmount());
+            newReceipt.setCurrency(request.getCurrency());
+            newReceipt.setIssuedAt(now);
+            return receiptRepository.save(newReceipt);
+        });
+
+        chat.setUpdatedAt(now);
+        serviceRequestRepository.save(chat);
+
+        addChatMessage(chat.getId(), ChatSender.PLATFORM,
+                "Оплата подтверждена, сформирован чек " + receipt.getReceiptNumber() + ".",
+                now);
+        addChatMessage(chat.getId(), ChatSender.PLATFORM,
+                "Хост уведомлен о поступлении оплаты.",
+                now);
+    }
+
+    @Transactional
+    public void processYooKassaPaymentFailure(String providerPaymentId) {
+        PaymentRequest paymentRequest = findPaymentByProviderId(providerPaymentId);
+        if (isFinalPaymentStatus(paymentRequest.getStatus())) {
+            return;
+        }
+
+        ExtraServiceRequest request = findExtraServiceRequestById(paymentRequest.getExtraServiceRequestId());
+        ServiceRequest chat = findChat(request.getChatId());
+
+        OffsetDateTime now = OffsetDateTime.now();
+        paymentRequest.setStatus(PaymentRequestStatus.FAILED);
+        paymentRequest.setResolvedAt(now);
+        paymentRequestRepository.save(paymentRequest);
+
+        request.setStatus(ExtraServiceRequestStatus.PAYMENT_FAILED);
+        request.setUpdatedAt(now);
+        extraServiceRequestRepository.save(request);
+
+        chat.setUpdatedAt(now);
+        serviceRequestRepository.save(chat);
+
+        addChatMessage(chat.getId(), ChatSender.PLATFORM,
+                "Списание неуспешно. Гость и хост уведомлены.",
+                now);
     }
 
     @Transactional
@@ -237,17 +372,21 @@ public class ExtraServiceProcessService {
     }
 
     private ExtraServiceRequest findExtraServiceRequest(UUID chatId, UUID requestId) {
-        ExtraServiceRequest request = extraServiceRequestRepository.findById(requestId)
-                .orElseThrow(() -> new NotFoundException("Extra service request not found: " + requestId));
+        ExtraServiceRequest request = findExtraServiceRequestById(requestId);
         if (!request.getChatId().equals(chatId)) {
             throw new BusinessException("Заявка не принадлежит данному чату.");
         }
         return request;
     }
 
-    private PaymentRequest findPaymentRequest(UUID extraServiceRequestId) {
-        return paymentRequestRepository.findByExtraServiceRequestId(extraServiceRequestId)
-                .orElseThrow(() -> new NotFoundException("Payment request not found for extra service request: " + extraServiceRequestId));
+    private ExtraServiceRequest findExtraServiceRequestById(UUID requestId) {
+        return extraServiceRequestRepository.findById(requestId)
+                .orElseThrow(() -> new NotFoundException("Extra service request not found: " + requestId));
+    }
+
+    private PaymentRequest findPaymentByProviderId(String providerPaymentId) {
+        return paymentRequestRepository.findByProviderPaymentId(providerPaymentId)
+                .orElseThrow(() -> new NotFoundException("Payment request not found by provider payment id: " + providerPaymentId));
     }
 
     private ChatMessage addChatMessage(UUID chatId, ChatSender sender, String text, OffsetDateTime at) {
@@ -257,7 +396,18 @@ public class ExtraServiceProcessService {
         chatMessage.setSender(sender);
         chatMessage.setMessage(text);
         chatMessage.setCreatedAt(at);
-        return chatMessageRepository.save(chatMessage);
+        ChatMessage saved = chatMessageRepository.save(chatMessage);
+        chatEventsPublisher.publishMessage(chatId, toChatMessageView(saved));
+        return saved;
+    }
+
+    private void deletePaymentArtifacts(UUID extraServiceRequestId) {
+        PaymentRequest paymentRequest = paymentRequestRepository.findByExtraServiceRequestId(extraServiceRequestId).orElse(null);
+        if (paymentRequest == null) {
+            return;
+        }
+        receiptRepository.deleteByPaymentRequestId(paymentRequest.getId());
+        paymentRequestRepository.delete(paymentRequest);
     }
 
     private ServiceRequestView toServiceRequestView(ServiceRequest chat) {
@@ -307,8 +457,11 @@ public class ExtraServiceProcessService {
 
         return new PaymentRequestView(
                 paymentRequest.getId(),
+                paymentRequest.getProviderPaymentId(),
+                paymentRequest.getPaymentUrl(),
                 paymentRequest.getStatus(),
                 paymentRequest.getCreatedAt(),
+                paymentRequest.getExpiresAt(),
                 paymentRequest.getResolvedAt(),
                 receiptView
         );
@@ -339,5 +492,11 @@ public class ExtraServiceProcessService {
 
     private String generateReceiptNumber(UUID requestId, OffsetDateTime now) {
         return "RCP-" + now.toEpochSecond() + "-" + requestId.toString().substring(0, 8);
+    }
+
+    private boolean isFinalPaymentStatus(PaymentRequestStatus status) {
+        return status == PaymentRequestStatus.PAID
+                || status == PaymentRequestStatus.FAILED
+                || status == PaymentRequestStatus.REJECTED;
     }
 }

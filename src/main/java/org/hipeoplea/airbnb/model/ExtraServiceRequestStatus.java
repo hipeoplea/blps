@@ -1,7 +1,8 @@
 package org.hipeoplea.airbnb.model;
 
 public enum ExtraServiceRequestStatus {
-    REQUEST_CREATED,
+    WAITING_GUEST_APPROVAL,
+    PAYMENT_LINK_SENT,
     PAID,
     PAYMENT_FAILED,
     REJECTED,

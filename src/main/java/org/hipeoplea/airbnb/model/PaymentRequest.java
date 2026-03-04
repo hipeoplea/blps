@@ -19,12 +19,21 @@ public class PaymentRequest {
     @Column(name = "extra_service_request_id", nullable = false, unique = true)
     private UUID extraServiceRequestId;
 
+    @Column(name = "provider_payment_id", unique = true, length = 128)
+    private String providerPaymentId;
+
+    @Column(name = "payment_url", length = 2000)
+    private String paymentUrl;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 32)
     private PaymentRequestStatus status;
 
     @Column(name = "created_at", nullable = false)
     private OffsetDateTime createdAt;
+
+    @Column(name = "expires_at")
+    private OffsetDateTime expiresAt;
 
     @Column(name = "resolved_at")
     private OffsetDateTime resolvedAt;
@@ -53,6 +62,22 @@ public class PaymentRequest {
         this.status = status;
     }
 
+    public String getProviderPaymentId() {
+        return providerPaymentId;
+    }
+
+    public void setProviderPaymentId(String providerPaymentId) {
+        this.providerPaymentId = providerPaymentId;
+    }
+
+    public String getPaymentUrl() {
+        return paymentUrl;
+    }
+
+    public void setPaymentUrl(String paymentUrl) {
+        this.paymentUrl = paymentUrl;
+    }
+
     public OffsetDateTime getCreatedAt() {
         return createdAt;
     }
@@ -67,5 +92,13 @@ public class PaymentRequest {
 
     public void setResolvedAt(OffsetDateTime resolvedAt) {
         this.resolvedAt = resolvedAt;
+    }
+
+    public OffsetDateTime getExpiresAt() {
+        return expiresAt;
+    }
+
+    public void setExpiresAt(OffsetDateTime expiresAt) {
+        this.expiresAt = expiresAt;
     }
 }

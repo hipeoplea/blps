@@ -13,8 +13,11 @@ import org.hipeoplea.airbnb.model.PaymentRequestStatus;
 public class PaymentRequestView {
 
     private UUID id;
+    private String providerPaymentId;
+    private String paymentUrl;
     private PaymentRequestStatus status;
     private OffsetDateTime createdAt;
+    private OffsetDateTime expiresAt;
     private OffsetDateTime resolvedAt;
     private ReceiptView receipt;
 }

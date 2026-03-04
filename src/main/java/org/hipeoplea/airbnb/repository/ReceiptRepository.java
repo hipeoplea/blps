@@ -8,4 +8,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface ReceiptRepository extends JpaRepository<Receipt, UUID> {
 
     Optional<Receipt> findByPaymentRequestId(UUID paymentRequestId);
+
+    void deleteByPaymentRequestId(UUID paymentRequestId);
 }
